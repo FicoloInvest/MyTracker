@@ -271,18 +271,23 @@ function renderMetrics(){
 function renderChart(){
   const entries=[...window.state.history].sort((a,b)=>a.fecha.localeCompare(b.fecha));
   let labels=[],vals=[];
-  if(!entries.length){for(let i=29;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);labels.push(d.toLocaleDateString('es-ES',{day:'numeric',month:'short'}));vals.push(null);}}
-  else{
+  if(!entries.length){
+    for(let i=29;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);labels.push(d.toLocaleDateString('es-ES',{day:'numeric',month:'short'}));vals.push(null);}
+  } else {
     const byDate={};
     entries.forEach(e=>{if(!byDate[e.fecha])byDate[e.fecha]={};byDate[e.fecha][e.fondo]=e.precio;});
     const allDates=[...new Set(entries.map(e=>e.fecha))].sort();
     const sliced=chartRange>=999?allDates:allDates.slice(-chartRange);
     labels=sliced.map(d=>{const dt=new Date(d+'T12:00:00');return dt.toLocaleDateString('es-ES',{day:'numeric',month:'short'});});
-    vals=sliced.map(date=>window.state.positions.reduce((s,p)=>{const pr=byDate[date]?.[p.nombre]??null;return pr!==null?s+(p.participaciones*pr):s;},0)||null);
+    // FIX: usar precio actual como fallback cuando no hay dato histórico para un fondo en esa fecha
+    vals=sliced.map(date=>window.state.positions.reduce((s,p)=>{
+      const pr=byDate[date]?.[p.nombre]??p.actual;
+      return s+(p.participaciones*pr);
+    },0));
   }
   const ctx=document.getElementById('evoChart').getContext('2d');
   if(evoInst)evoInst.destroy();
-  evoInst=new Chart(ctx,{type:'line',data:{labels,datasets:[{data:vals,borderColor:'#c8f060',backgroundColor:'rgba(200,240,96,0.06)',tension:0.3,fill:true,pointRadius:2,pointBackgroundColor:'#c8f060',spanGaps:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10},color:'#666',maxRotation:45,autoSkip:true}},y:{ticks:{font:{size:10},color:'#666',callback:v=>v+'€'},grid:{color:'rgba(255,255,255,0.04)'}}}}});
+  evoInst=new Chart(ctx,{type:'line',data:{labels,datasets:[{data:vals,borderColor:'#c8f060',backgroundColor:'rgba(200,240,96,0.06)',tension:0.3,fill:true,pointRadius:2,pointBackgroundColor:'#c8f060',spanGaps:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10},color:'#666',maxRotation:45,autoSkip:true}},y:{ticks:{font:{size:10},color:'#666',callback:v=>v.toLocaleString('es-ES')+'€'},grid:{color:'rgba(255,255,255,0.04)'}}}}});
 }
 
 function renderPie(){
