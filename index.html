@@ -25,26 +25,23 @@
   const db = getFirestore(app);
   const REF = doc(db, "tracker", "data");
 
-  window._saving = false;
-
   window.saveToFirebase = async function(state) {
-    try {
-      window._saving = true;
-      await setDoc(REF, state);
-      window._saving = false;
-    } catch(e) {
-      console.error("Error guardando:", e);
-      window._saving = false;
-    }
+    try { await setDoc(REF, state); } catch(e) { console.error("Error guardando:", e); }
   };
+
+  function syncActualFromHistory(state) {
+    if(!state.positions||!state.history) return;
+    state.positions.forEach(function(pos){
+      var entries=state.history.filter(function(h){return h.fondo===pos.nombre;}).sort(function(a,b){return b.fecha.localeCompare(a.fecha);});
+      if(entries.length>0) pos.actual=entries[0].precio;
+    });
+  }
 
   onSnapshot(REF, (snap) => {
     if(snap.exists()) {
-      // No sobreescribir el estado local mientras se está guardando
-      if(!window._saving) {
-        window.state = snap.data();
-        if(window._appReady) window.renderAll();
-      }
+      window.state = snap.data();
+      syncActualFromHistory(window.state);
+      if(window._appReady) window.renderAll();
     }
     if(!window._appReady) initApp();
   }, (err) => {
