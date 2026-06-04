@@ -152,6 +152,7 @@
         <div class="field"><label>Nombre / ticker</label><input id="f-nombre" placeholder="Ej: VWCE" style="width:180px"></div>
         <div class="field"><label>Participaciones</label><input id="f-partic" type="number" placeholder="10" style="width:90px" step="any"></div>
         <div class="field"><label>Precio compra (€)</label><input id="f-precio" type="number" placeholder="50.00" style="width:110px" step="any"></div>
+        <div class="field"><label>Precio actual (€)</label><input id="f-actual" type="number" placeholder="55.00" style="width:110px" step="any"></div>
         <div class="field" style="justify-content:flex-end"><button class="primary" onclick="addPosition()">Añadir</button></div>
       </div>
     </div>
@@ -245,11 +246,12 @@ function addPosition(){
   const n=document.getElementById('f-nombre').value.trim();
   const p=parseFloat(document.getElementById('f-partic').value);
   const c=parseFloat(document.getElementById('f-precio').value);
+  const a=parseFloat(document.getElementById('f-actual').value);
   if(!n||isNaN(p)||isNaN(c))return;
   const ex=window.state.positions.find(x=>x.nombre.toLowerCase()===n.toLowerCase());
-  if(ex){ex.participaciones=p;ex.compra=c;}
-  else window.state.positions.push({id:Date.now(),nombre:n,participaciones:p,compra:c});
-  ['f-nombre','f-partic','f-precio'].forEach(id=>document.getElementById(id).value='');
+  if(ex){ex.participaciones=p;ex.compra=c;if(!isNaN(a))ex.actual=a;}
+  else window.state.positions.push({id:Date.now(),nombre:n,participaciones:p,compra:c,actual:isNaN(a)?c:a});
+  ['f-nombre','f-partic','f-precio','f-actual'].forEach(id=>document.getElementById(id).value='');
   save();renderPositions();updateSelects();renderMetrics();renderPie();
 }
 
