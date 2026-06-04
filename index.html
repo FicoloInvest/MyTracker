@@ -25,14 +25,26 @@
   const db = getFirestore(app);
   const REF = doc(db, "tracker", "data");
 
+  window._saving = false;
+
   window.saveToFirebase = async function(state) {
-    try { await setDoc(REF, state); } catch(e) { console.error("Error guardando:", e); }
+    try {
+      window._saving = true;
+      await setDoc(REF, state);
+      window._saving = false;
+    } catch(e) {
+      console.error("Error guardando:", e);
+      window._saving = false;
+    }
   };
 
   onSnapshot(REF, (snap) => {
     if(snap.exists()) {
-      window.state = snap.data();
-      if(window._appReady) window.renderAll();
+      // No sobreescribir el estado local mientras se está guardando
+      if(!window._saving) {
+        window.state = snap.data();
+        if(window._appReady) window.renderAll();
+      }
     }
     if(!window._appReady) initApp();
   }, (err) => {
@@ -304,12 +316,16 @@ function renderPie(){
 function addHistory(){
   const f=document.getElementById('h-fondo').value,fecha=document.getElementById('h-fecha').value,pr=parseFloat(document.getElementById('h-precio').value);
   if(!f||!fecha||isNaN(pr))return;
+  // Actualizar o añadir entrada en historial
   const ex=window.state.history.find(h=>h.fondo===f&&h.fecha===fecha);
   if(ex){ex.precio=pr;}else window.state.history.push({id:Date.now(),fondo:f,fecha,precio:pr});
+  // Actualizar precio actual en posiciones si la fecha es hoy o la más reciente
+  const today=new Date().toISOString().split('T')[0];
+  const latestForFund=[...window.state.history].filter(h=>h.fondo===f).sort((a,b)=>b.fecha.localeCompare(a.fecha));
   const pos=window.state.positions.find(p=>p.nombre===f);
-  if(pos)pos.actual=pr;
+  if(pos&&latestForFund.length>0)pos.actual=latestForFund[0].precio;
   document.getElementById('h-precio').value='';
-  save();renderHistory();renderMetrics();renderPie();
+  save();renderHistory();renderPositions();renderMetrics();renderPie();renderChart();
 }
 
 function deleteHistory(id){window.state.history=window.state.history.filter(h=>h.id!==id);save();renderHistory();}
