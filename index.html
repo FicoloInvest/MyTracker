@@ -29,18 +29,9 @@
     try { await setDoc(REF, state); } catch(e) { console.error("Error guardando:", e); }
   };
 
-  function syncActualFromHistory(state) {
-    if(!state.positions||!state.history) return;
-    state.positions.forEach(function(pos){
-      var entries=state.history.filter(function(h){return h.fondo===pos.nombre;}).sort(function(a,b){return b.fecha.localeCompare(a.fecha);});
-      if(entries.length>0) pos.actual=entries[0].precio;
-    });
-  }
-
   onSnapshot(REF, (snap) => {
     if(snap.exists()) {
       window.state = snap.data();
-      syncActualFromHistory(window.state);
       if(window._appReady) window.renderAll();
     }
     if(!window._appReady) initApp();
@@ -161,7 +152,6 @@
         <div class="field"><label>Nombre / ticker</label><input id="f-nombre" placeholder="Ej: VWCE" style="width:180px"></div>
         <div class="field"><label>Participaciones</label><input id="f-partic" type="number" placeholder="10" style="width:90px" step="any"></div>
         <div class="field"><label>Precio compra (€)</label><input id="f-precio" type="number" placeholder="50.00" style="width:110px" step="any"></div>
-        <div class="field"><label>Precio actual (€)</label><input id="f-actual" type="number" placeholder="55.00" style="width:110px" step="any"></div>
         <div class="field" style="justify-content:flex-end"><button class="primary" onclick="addPosition()">Añadir</button></div>
       </div>
     </div>
@@ -220,6 +210,17 @@ let chartRange=30,evoInst=null,pieInst=null;
 function setSyncDot(s){document.getElementById('sync-dot').className='sync-dot '+(s||'')}
 async function save(){setSyncDot('saving');await window.saveToFirebase(window.state);setSyncDot('ok')}
 
+// Obtiene el precio actual de un fondo: usa el historial más reciente, luego pos.actual de Firebase, luego pos.compra
+function getPrecioActual(pos) {
+  if(window.state.history) {
+    const entries = window.state.history
+      .filter(h => h.fondo === pos.nombre)
+      .sort((a,b) => b.fecha.localeCompare(a.fecha));
+    if(entries.length > 0) return entries[0].precio;
+  }
+  return pos.actual ?? pos.compra;
+}
+
 window.renderAll=function(){
   renderMetrics();renderChart();renderPie();
   renderPositions();renderHistory();renderAlerts();
@@ -244,12 +245,11 @@ function addPosition(){
   const n=document.getElementById('f-nombre').value.trim();
   const p=parseFloat(document.getElementById('f-partic').value);
   const c=parseFloat(document.getElementById('f-precio').value);
-  const a=parseFloat(document.getElementById('f-actual').value);
-  if(!n||isNaN(p)||isNaN(c)||isNaN(a))return;
+  if(!n||isNaN(p)||isNaN(c))return;
   const ex=window.state.positions.find(x=>x.nombre.toLowerCase()===n.toLowerCase());
-  if(ex){ex.participaciones=p;ex.compra=c;ex.actual=a;}
-  else window.state.positions.push({id:Date.now(),nombre:n,participaciones:p,compra:c,actual:a});
-  ['f-nombre','f-partic','f-precio','f-actual'].forEach(id=>document.getElementById(id).value='');
+  if(ex){ex.participaciones=p;ex.compra=c;}
+  else window.state.positions.push({id:Date.now(),nombre:n,participaciones:p,compra:c});
+  ['f-nombre','f-partic','f-precio'].forEach(id=>document.getElementById(id).value='');
   save();renderPositions();updateSelects();renderMetrics();renderPie();
 }
 
@@ -260,18 +260,19 @@ function renderPositions(){
   if(!window.state.positions.length){tb.innerHTML='';em.style.display='';return;}
   em.style.display='none';
   tb.innerHTML=window.state.positions.map(p=>{
-    const val=(p.participaciones*p.actual).toFixed(2);
-    const pg=((p.actual-p.compra)*p.participaciones).toFixed(2);
-    const pct=(((p.actual-p.compra)/p.compra)*100).toFixed(2);
+    const actual=getPrecioActual(p);
+    const val=(p.participaciones*actual).toFixed(2);
+    const pg=((actual-p.compra)*p.participaciones).toFixed(2);
+    const pct=(((actual-p.compra)/p.compra)*100).toFixed(2);
     const up=parseFloat(pg)>=0;
-    return `<tr><td><strong>${p.nombre}</strong></td><td class="mono">${p.participaciones}</td><td class="mono">${p.compra.toFixed(2)}€</td><td class="mono">${p.actual.toFixed(2)}€</td><td class="mono">${val}€</td><td><span class="badge ${up?'badge-up':'badge-dn'}">${up?'+':''}${pg}€ (${up?'+':''}${pct}%)</span></td><td><button class="sm" onclick="deletePosition(${p.id})"><i class="ti ti-trash"></i></button></td></tr>`;
+    return `<tr><td><strong>${p.nombre}</strong></td><td class="mono">${p.participaciones}</td><td class="mono">${p.compra.toFixed(2)}€</td><td class="mono">${actual.toFixed(2)}€</td><td class="mono">${val}€</td><td><span class="badge ${up?'badge-up':'badge-dn'}">${up?'+':''}${pg}€ (${up?'+':''}${pct}%)</span></td><td><button class="sm" onclick="deletePosition(${p.id})"><i class="ti ti-trash"></i></button></td></tr>`;
   }).join('');
 }
 
 function renderMetrics(){
   const row=document.getElementById('metrics-row');
   if(!window.state.positions.length){row.innerHTML='<p style="color:var(--muted);font-size:13px">Añade posiciones para ver el resumen.</p>';return;}
-  const total=window.state.positions.reduce((s,p)=>s+p.participaciones*p.actual,0);
+  const total=window.state.positions.reduce((s,p)=>s+p.participaciones*getPrecioActual(p),0);
   const coste=window.state.positions.reduce((s,p)=>s+p.participaciones*p.compra,0);
   const pg=total-coste,pct=coste?((pg/coste)*100):0,up=pg>=0;
   row.innerHTML=`<div class="metric"><div class="metric-label">Valor total</div><div class="metric-value mono">${total.toFixed(2)}€</div></div><div class="metric"><div class="metric-label">Coste total</div><div class="metric-value mono">${coste.toFixed(2)}€</div></div><div class="metric"><div class="metric-label">P&G total</div><div class="metric-value mono ${up?'up':'dn'}">${up?'+':''}${pg.toFixed(2)}€</div><div class="metric-sub ${up?'up':'dn'}">${up?'+':''}${pct.toFixed(2)}%</div></div><div class="metric"><div class="metric-label">Fondos</div><div class="metric-value mono">${window.state.positions.length}</div></div>`;
@@ -288,9 +289,8 @@ function renderChart(){
     const allDates=[...new Set(entries.map(e=>e.fecha))].sort();
     const sliced=chartRange>=999?allDates:allDates.slice(-chartRange);
     labels=sliced.map(d=>{const dt=new Date(d+'T12:00:00');return dt.toLocaleDateString('es-ES',{day:'numeric',month:'short'});});
-    // FIX: usar precio actual como fallback cuando no hay dato histórico para un fondo en esa fecha
     vals=sliced.map(date=>window.state.positions.reduce((s,p)=>{
-      const pr=byDate[date]?.[p.nombre]??p.actual;
+      const pr=byDate[date]?.[p.nombre]??getPrecioActual(p);
       return s+(p.participaciones*pr);
     },0));
   }
@@ -304,7 +304,7 @@ function renderPie(){
   if(pieInst)pieInst.destroy();
   if(!window.state.positions.length){leg.innerHTML='<span style="color:var(--muted)">Sin datos.</span>';return;}
   const labels=window.state.positions.map(p=>p.nombre);
-  const vals=window.state.positions.map(p=>p.participaciones*p.actual);
+  const vals=window.state.positions.map(p=>p.participaciones*getPrecioActual(p));
   const total=vals.reduce((a,b)=>a+b,0);
   pieInst=new Chart(ctx,{type:'doughnut',data:{labels,datasets:[{data:vals,backgroundColor:PIE_COLORS.slice(0,labels.length),borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},cutout:'65%'}});
   leg.innerHTML=labels.map((l,i)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px"><span style="width:8px;height:8px;border-radius:2px;background:${PIE_COLORS[i]};flex-shrink:0"></span><span style="color:#aaa">${l}</span><span style="margin-left:auto;font-family:var(--mono);color:#666">${((vals[i]/total)*100).toFixed(1)}%</span></div>`).join('');
@@ -313,19 +313,13 @@ function renderPie(){
 function addHistory(){
   const f=document.getElementById('h-fondo').value,fecha=document.getElementById('h-fecha').value,pr=parseFloat(document.getElementById('h-precio').value);
   if(!f||!fecha||isNaN(pr))return;
-  // Actualizar o añadir entrada en historial
   const ex=window.state.history.find(h=>h.fondo===f&&h.fecha===fecha);
   if(ex){ex.precio=pr;}else window.state.history.push({id:Date.now(),fondo:f,fecha,precio:pr});
-  // Actualizar precio actual en posiciones si la fecha es hoy o la más reciente
-  const today=new Date().toISOString().split('T')[0];
-  const latestForFund=[...window.state.history].filter(h=>h.fondo===f).sort((a,b)=>b.fecha.localeCompare(a.fecha));
-  const pos=window.state.positions.find(p=>p.nombre===f);
-  if(pos&&latestForFund.length>0)pos.actual=latestForFund[0].precio;
   document.getElementById('h-precio').value='';
-  save();renderHistory();renderPositions();renderMetrics();renderPie();renderChart();
+  save();renderAll();
 }
 
-function deleteHistory(id){window.state.history=window.state.history.filter(h=>h.id!==id);save();renderHistory();}
+function deleteHistory(id){window.state.history=window.state.history.filter(h=>h.id!==id);save();renderAll();}
 
 function renderHistory(){
   const tb=document.getElementById('history-table'),em=document.getElementById('hist-empty');
@@ -345,7 +339,7 @@ function addAlert(){
 
 function deleteAlert(id){window.state.alerts=window.state.alerts.filter(a=>a.id!==id);save();renderAlerts();}
 
-function checkAlerts(){window.state.alerts.forEach(al=>{const pos=window.state.positions.find(p=>p.nombre===al.fondo);if(!pos)return;al.triggered=al.cond==='above'?pos.actual>=al.precio:pos.actual<=al.precio;});}
+function checkAlerts(){window.state.alerts.forEach(al=>{const actual=getPrecioActual(window.state.positions.find(p=>p.nombre===al.fondo)||{compra:0});al.triggered=al.cond==='above'?actual>=al.precio:actual<=al.precio;});}
 
 function renderAlerts(){
   const list=document.getElementById('alerts-list'),em=document.getElementById('alert-empty');
@@ -358,7 +352,7 @@ function renderAlerts(){
 function renderDailySummary(){
   const el=document.getElementById('daily-summary');
   if(!window.state.positions.length){el.innerHTML='Sin posiciones registradas.';return;}
-  const total=window.state.positions.reduce((s,p)=>s+p.participaciones*p.actual,0);
+  const total=window.state.positions.reduce((s,p)=>s+p.participaciones*getPrecioActual(p),0);
   const coste=window.state.positions.reduce((s,p)=>s+p.participaciones*p.compra,0);
   const pg=total-coste,up=pg>=0;
   const triggered=window.state.alerts.filter(a=>a.triggered);
@@ -375,6 +369,8 @@ function initApp(){
   window._appReady=true;
   window.renderAll();
 }
+
+function renderAll(){window.renderAll();}
 </script>
 </body>
 </html>
