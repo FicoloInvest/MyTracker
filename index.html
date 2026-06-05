@@ -127,7 +127,7 @@
     <div class="charts-grid">
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
-          <span class="card-title" style="margin:0">Evolución</span>
+          <span class="card-title" style="margin:0">Evolución por fondo</span>
           <div style="display:flex;gap:4px">
             <button class="range-btn" onclick="setRange(7,this)">7d</button>
             <button class="range-btn active" onclick="setRange(30,this)">1m</button>
@@ -135,7 +135,7 @@
             <button class="range-btn" onclick="setRange(999,this)">Todo</button>
           </div>
         </div>
-        <div style="position:relative;height:200px"><canvas id="evoChart"></canvas></div>
+        <div style="position:relative;height:220px"><canvas id="evoChart"></canvas></div>
       </div>
       <div class="card">
         <div class="card-title">Distribución</div>
@@ -211,7 +211,6 @@ let chartRange=30,evoInst=null,pieInst=null;
 function setSyncDot(s){document.getElementById('sync-dot').className='sync-dot '+(s||'')}
 async function save(){setSyncDot('saving');await window.saveToFirebase(window.state);setSyncDot('ok')}
 
-// Obtiene el precio actual de un fondo: usa el historial más reciente, luego pos.actual de Firebase, luego pos.compra
 function getPrecioActual(pos) {
   if(window.state.history) {
     const entries = window.state.history
@@ -282,23 +281,58 @@ function renderMetrics(){
 
 function renderChart(){
   const entries=[...window.state.history].sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  let labels=[],vals=[];
-  if(!entries.length){
-    for(let i=29;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);labels.push(d.toLocaleDateString('es-ES',{day:'numeric',month:'short'}));vals.push(null);}
-  } else {
-    const byDate={};
-    entries.forEach(e=>{if(!byDate[e.fecha])byDate[e.fecha]={};byDate[e.fecha][e.fondo]=e.precio;});
-    const allDates=[...new Set(entries.map(e=>e.fecha))].sort();
-    const sliced=chartRange>=999?allDates:allDates.slice(-chartRange);
-    labels=sliced.map(d=>{const dt=new Date(d+'T12:00:00');return dt.toLocaleDateString('es-ES',{day:'numeric',month:'short'});});
-    vals=sliced.map(date=>window.state.positions.reduce((s,p)=>{
-      const pr=byDate[date]?.[p.nombre]??getPrecioActual(p);
-      return s+(p.participaciones*pr);
-    },0));
-  }
   const ctx=document.getElementById('evoChart').getContext('2d');
   if(evoInst)evoInst.destroy();
-  evoInst=new Chart(ctx,{type:'line',data:{labels,datasets:[{data:vals,borderColor:'#c8f060',backgroundColor:'rgba(200,240,96,0.06)',tension:0.3,fill:true,pointRadius:2,pointBackgroundColor:'#c8f060',spanGaps:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10},color:'#666',maxRotation:45,autoSkip:true}},y:{ticks:{font:{size:10},color:'#666',callback:v=>v.toLocaleString('es-ES')+'€'},grid:{color:'rgba(255,255,255,0.04)'}}}}});
+
+  if(!entries.length||!window.state.positions.length){
+    evoInst=new Chart(ctx,{type:'line',data:{labels:[],datasets:[]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#666'}},y:{ticks:{color:'#666'}}}}});
+    return;
+  }
+
+  const allDates=[...new Set(entries.map(e=>e.fecha))].sort();
+  const sliced=chartRange>=999?allDates:allDates.slice(-chartRange);
+  const labels=sliced.map(d=>new Date(d+'T12:00:00').toLocaleDateString('es-ES',{day:'numeric',month:'short'}));
+
+  const byDate={};
+  entries.forEach(e=>{if(!byDate[e.fecha])byDate[e.fecha]={};byDate[e.fecha][e.fondo]=e.precio;});
+
+  const datasets=window.state.positions.map((p,i)=>({
+    label:p.nombre,
+    data:sliced.map(date=>byDate[date]?.[p.nombre]??null),
+    borderColor:PIE_COLORS[i%PIE_COLORS.length],
+    backgroundColor:'transparent',
+    tension:0.3,
+    fill:false,
+    pointRadius:2,
+    pointBackgroundColor:PIE_COLORS[i%PIE_COLORS.length],
+    spanGaps:true
+  }));
+
+  evoInst=new Chart(ctx,{
+    type:'line',
+    data:{labels,datasets},
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{
+        legend:{
+          display:true,
+          labels:{
+            color:'#888',
+            font:{size:11},
+            boxWidth:12,
+            padding:10,
+            usePointStyle:true,
+            pointStyle:'circle'
+          }
+        }
+      },
+      scales:{
+        x:{ticks:{font:{size:10},color:'#666',maxRotation:45,autoSkip:true}},
+        y:{ticks:{font:{size:10},color:'#666',callback:v=>v.toFixed(2)+'€'},grid:{color:'rgba(255,255,255,0.04)'}}
+      }
+    }
+  });
 }
 
 function renderPie(){
