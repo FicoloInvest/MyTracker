@@ -92,6 +92,8 @@
   button.sm:hover{color:var(--red);border-color:var(--red)}
   .range-btn{padding:4px 10px;font-size:12px;border-radius:5px;border:1px solid var(--border);color:var(--muted);background:transparent;cursor:pointer}
   .range-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(200,240,96,.08)}
+  .chart-mode-btn{padding:4px 10px;font-size:12px;border-radius:5px;border:1px solid var(--border);color:var(--muted);background:transparent;cursor:pointer}
+  .chart-mode-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(200,240,96,.08)}
   .empty{text-align:center;padding:2.5rem;color:var(--muted);font-size:13px}
   .alert-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)}
   .alert-row:last-child{border-bottom:none}
@@ -126,16 +128,19 @@
     <div class="metrics" id="metrics-row"></div>
     <div class="charts-grid">
       <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
-          <span class="card-title" style="margin:0">Evolución por fondo</span>
-          <div style="display:flex;gap:4px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;flex-wrap:wrap;gap:8px">
+          <span class="card-title" style="margin:0">Evolución del capital</span>
+          <div style="display:flex;gap:4px;flex-wrap:wrap">
+            <button class="chart-mode-btn active" onclick="setChartMode('total',this)">Total</button>
+            <button class="chart-mode-btn" onclick="setChartMode('fondos',this)">Por fondo</button>
+            <div style="width:1px;background:var(--border);margin:0 2px"></div>
             <button class="range-btn" onclick="setRange(7,this)">7d</button>
             <button class="range-btn active" onclick="setRange(30,this)">1m</button>
             <button class="range-btn" onclick="setRange(90,this)">3m</button>
             <button class="range-btn" onclick="setRange(999,this)">Todo</button>
           </div>
         </div>
-        <div style="position:relative;height:220px"><canvas id="evoChart"></canvas></div>
+        <div style="position:relative;height:240px"><canvas id="evoChart"></canvas></div>
       </div>
       <div class="card">
         <div class="card-title">Distribución</div>
@@ -206,7 +211,7 @@
 <script>
 const PIE_COLORS=['#c8f060','#60f0b8','#60b8f0','#f060b8','#f0c860','#b860f0','#f08060'];
 window.state={positions:[],history:[],alerts:[]};
-let chartRange=30,evoInst=null,pieInst=null;
+let chartRange=30, chartMode='total', evoInst=null, pieInst=null;
 
 function setSyncDot(s){document.getElementById('sync-dot').className='sync-dot '+(s||'')}
 async function save(){setSyncDot('saving');await window.saveToFirebase(window.state);setSyncDot('ok')}
@@ -239,7 +244,19 @@ function showTab(t){
   if(t==='alertas'){renderAlerts();updateSelects();renderDailySummary();}
 }
 
-function setRange(r,btn){chartRange=r;document.querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderChart();}
+function setRange(r,btn){
+  chartRange=r;
+  document.querySelectorAll('.range-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderChart();
+}
+
+function setChartMode(mode,btn){
+  chartMode=mode;
+  document.querySelectorAll('.chart-mode-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderChart();
+}
 
 function addPosition(){
   const n=document.getElementById('f-nombre').value.trim();
@@ -279,6 +296,14 @@ function renderMetrics(){
   row.innerHTML=`<div class="metric"><div class="metric-label">Valor total</div><div class="metric-value mono">${total.toFixed(2)}€</div></div><div class="metric"><div class="metric-label">Coste total</div><div class="metric-value mono">${coste.toFixed(2)}€</div></div><div class="metric"><div class="metric-label">P&G total</div><div class="metric-value mono ${up?'up':'dn'}">${up?'+':''}${pg.toFixed(2)}€</div><div class="metric-sub ${up?'up':'dn'}">${up?'+':''}${pct.toFixed(2)}%</div></div><div class="metric"><div class="metric-label">Fondos</div><div class="metric-value mono">${window.state.positions.length}</div></div>`;
 }
 
+function getValorEnFecha(pos, fecha) {
+  const known = window.state.history
+    .filter(h => h.fondo === pos.nombre && h.fecha <= fecha)
+    .sort((a,b) => b.fecha.localeCompare(a.fecha));
+  if(!known.length) return null; // sin datos aún para este fondo
+  return pos.participaciones * known[0].precio;
+}
+
 function renderChart(){
   const entries=[...window.state.history].sort((a,b)=>a.fecha.localeCompare(b.fecha));
   const ctx=document.getElementById('evoChart').getContext('2d');
@@ -293,20 +318,75 @@ function renderChart(){
   const sliced=chartRange>=999?allDates:allDates.slice(-chartRange);
   const labels=sliced.map(d=>new Date(d+'T12:00:00').toLocaleDateString('es-ES',{day:'numeric',month:'short'}));
 
-  const byDate={};
-  entries.forEach(e=>{if(!byDate[e.fecha])byDate[e.fecha]={};byDate[e.fecha][e.fondo]=e.precio;});
+  let datasets=[];
 
-  const datasets=window.state.positions.map((p,i)=>({
-    label:p.nombre,
-    data:sliced.map(date=>byDate[date]?.[p.nombre]??null),
-    borderColor:PIE_COLORS[i%PIE_COLORS.length],
-    backgroundColor:'transparent',
-    tension:0.3,
-    fill:false,
-    pointRadius:2,
-    pointBackgroundColor:PIE_COLORS[i%PIE_COLORS.length],
-    spanGaps:true
-  }));
+  if(chartMode==='total'){
+    // Una sola línea: suma total del portfolio en cada fecha
+    const vals=sliced.map(date=>{
+      const total=window.state.positions.reduce((sum,p)=>{
+        const v=getValorEnFecha(p,date);
+        return v!==null?sum+v:sum;
+      },0);
+      return total===0?null:total;
+    });
+    datasets=[{
+      label:'Total',
+      data:vals,
+      borderColor:'#c8f060',
+      backgroundColor:'rgba(200,240,96,0.06)',
+      tension:0.3,
+      fill:true,
+      pointRadius:2,
+      pointBackgroundColor:'#c8f060',
+      spanGaps:true,
+      borderWidth:2
+    }];
+  } else {
+    // Una línea por fondo (valor en €) + línea del total encima
+    const fondoDatasets=window.state.positions.map((p,i)=>{
+      const vals=sliced.map(date=>{
+        const v=getValorEnFecha(p,date);
+        return v!==null?v:null;
+      });
+      return {
+        label:p.nombre,
+        data:vals,
+        borderColor:PIE_COLORS[i%PIE_COLORS.length],
+        backgroundColor:'transparent',
+        tension:0.3,
+        fill:false,
+        pointRadius:2,
+        pointBackgroundColor:PIE_COLORS[i%PIE_COLORS.length],
+        spanGaps:true,
+        borderWidth:1.5
+      };
+    });
+
+    // Línea del total en blanco/gris destacada
+    const totalVals=sliced.map(date=>{
+      const total=window.state.positions.reduce((sum,p)=>{
+        const v=getValorEnFecha(p,date);
+        return v!==null?sum+v:sum;
+      },0);
+      return total===0?null:total;
+    });
+    const totalDataset={
+      label:'TOTAL',
+      data:totalVals,
+      borderColor:'#ffffff',
+      backgroundColor:'rgba(255,255,255,0.04)',
+      tension:0.3,
+      fill:false,
+      pointRadius:2,
+      pointBackgroundColor:'#ffffff',
+      spanGaps:true,
+      borderWidth:2.5,
+      borderDash:[],
+      order:0
+    };
+
+    datasets=[totalDataset,...fondoDatasets];
+  }
 
   evoInst=new Chart(ctx,{
     type:'line',
@@ -314,22 +394,30 @@ function renderChart(){
     options:{
       responsive:true,
       maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
       plugins:{
         legend:{
-          display:true,
+          display:chartMode==='fondos',
           labels:{
             color:'#888',
             font:{size:11},
-            boxWidth:12,
+            boxWidth:10,
             padding:10,
             usePointStyle:true,
             pointStyle:'circle'
+          }
+        },
+        tooltip:{
+          callbacks:{
+            label:function(ctx){
+              return ' '+ctx.dataset.label+': '+ctx.parsed.y.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+'€';
+            }
           }
         }
       },
       scales:{
         x:{ticks:{font:{size:10},color:'#666',maxRotation:45,autoSkip:true}},
-        y:{ticks:{font:{size:10},color:'#666',callback:v=>v.toFixed(2)+'€'},grid:{color:'rgba(255,255,255,0.04)'}}
+        y:{ticks:{font:{size:10},color:'#666',callback:v=>v.toLocaleString('es-ES')+'€'},grid:{color:'rgba(255,255,255,0.04)'}}
       }
     }
   });
