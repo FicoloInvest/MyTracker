@@ -122,6 +122,7 @@
     <button class="tab" onclick="showTab('posiciones')">Posiciones</button>
     <button class="tab" onclick="showTab('historial')">Historial</button>
     <button class="tab" onclick="showTab('alertas')">Alertas</button>
+    <button class="tab" onclick="showTab('rolex')">Rolex</button>
   </div>
 
   <div id="tab-resumen">
@@ -206,11 +207,28 @@
       <div class="summary-block" id="daily-summary"></div>
     </div>
   </div>
+
+  <div id="tab-rolex" style="display:none">
+    <div class="card">
+      <div class="card-title">Lista de espera</div>
+      <div id="rolex-display"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Configuración</div>
+      <div class="form-row">
+        <div class="field"><label>Modelo</label><input id="r-modelo" placeholder="Rolex Submariner Date" style="width:220px"></div>
+        <div class="field"><label>Referencia</label><input id="r-ref" placeholder="126610LN" style="width:120px"></div>
+        <div class="field"><label>Fecha de encargo</label><input id="r-inicio" type="date" style="width:150px"></div>
+        <div class="field"><label>Entrega estimada</label><input id="r-objetivo" type="date" style="width:150px"></div>
+        <div class="field" style="justify-content:flex-end"><button class="primary" onclick="saveRolex()">Guardar</button></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
 const PIE_COLORS=['#c8f060','#60f0b8','#60b8f0','#f060b8','#f0c860','#b860f0','#f08060'];
-window.state={positions:[],history:[],alerts:[]};
+window.state={positions:[],history:[],alerts:[],rolex:null};
 let chartRange=30, chartMode='total', evoInst=null, pieInst=null;
 
 function setSyncDot(s){document.getElementById('sync-dot').className='sync-dot '+(s||'')}
@@ -229,19 +247,20 @@ function getPrecioActual(pos) {
 window.renderAll=function(){
   renderMetrics();renderChart();renderPie();
   renderPositions();renderHistory();renderAlerts();
-  updateSelects();renderDailySummary();setSyncDot('ok');
+  updateSelects();renderDailySummary();renderRolex();setSyncDot('ok');
 };
 
 document.getElementById('header-date').textContent=new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 document.getElementById('h-fecha').value=new Date().toISOString().split('T')[0];
 
 function showTab(t){
-  ['resumen','posiciones','historial','alertas'].forEach(id=>document.getElementById('tab-'+id).style.display=id===t?'':'none');
-  document.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('active',['resumen','posiciones','historial','alertas'][i]===t));
+  ['resumen','posiciones','historial','alertas','rolex'].forEach(id=>document.getElementById('tab-'+id).style.display=id===t?'':'none');
+  document.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('active',['resumen','posiciones','historial','alertas','rolex'][i]===t));
   if(t==='resumen'){renderMetrics();renderChart();renderPie();}
   if(t==='posiciones')renderPositions();
   if(t==='historial'){renderHistory();updateSelects();}
   if(t==='alertas'){renderAlerts();updateSelects();renderDailySummary();}
+  if(t==='rolex'){populateRolexForm();renderRolex();}
 }
 
 function setRange(r,btn){
@@ -342,15 +361,20 @@ function renderChart(){
       borderWidth:2
     }];
   } else {
-    // Una línea por fondo (valor en €) + línea del total encima
+    // Una línea por fondo, reescalada a base 100 en el primer dato visible.
+    // Así fondos de tamaños muy distintos (3.000€ vs 18.000€) se comparan por
+    // su % de evolución y las líneas no salen planas.
     const fondoDatasets=window.state.positions.map((p,i)=>{
-      const vals=sliced.map(date=>{
+      const euros=sliced.map(date=>{
         const v=getValorEnFecha(p,date);
         return v!==null?v:null;
       });
+      const base=euros.find(v=>v!=null);
+      const idx=euros.map(v=>(v!=null&&base)?(v/base*100):null);
       return {
         label:p.nombre,
-        data:vals,
+        data:idx,
+        euros:euros,
         borderColor:PIE_COLORS[i%PIE_COLORS.length],
         backgroundColor:'transparent',
         tension:0.3,
@@ -362,30 +386,7 @@ function renderChart(){
       };
     });
 
-    // Línea del total en blanco/gris destacada
-    const totalVals=sliced.map(date=>{
-      const total=window.state.positions.reduce((sum,p)=>{
-        const v=getValorEnFecha(p,date);
-        return v!==null?sum+v:sum;
-      },0);
-      return total===0?null:total;
-    });
-    const totalDataset={
-      label:'TOTAL',
-      data:totalVals,
-      borderColor:'#ffffff',
-      backgroundColor:'rgba(255,255,255,0.04)',
-      tension:0.3,
-      fill:false,
-      pointRadius:2,
-      pointBackgroundColor:'#ffffff',
-      spanGaps:true,
-      borderWidth:2.5,
-      borderDash:[],
-      order:0
-    };
-
-    datasets=[totalDataset,...fondoDatasets];
+    datasets=[...fondoDatasets];
   }
 
   evoInst=new Chart(ctx,{
@@ -410,6 +411,13 @@ function renderChart(){
         tooltip:{
           callbacks:{
             label:function(ctx){
+              if(chartMode==='fondos'){
+                const e=ctx.dataset.euros?ctx.dataset.euros[ctx.dataIndex]:null;
+                const pct=ctx.parsed.y-100;
+                let s=' '+ctx.dataset.label+': '+(pct>=0?'+':'')+pct.toFixed(1)+'%';
+                if(e!=null)s+=' ('+e.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+'€)';
+                return s;
+              }
               return ' '+ctx.dataset.label+': '+ctx.parsed.y.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+'€';
             }
           }
@@ -417,7 +425,7 @@ function renderChart(){
       },
       scales:{
         x:{ticks:{font:{size:10},color:'#666',maxRotation:45,autoSkip:true}},
-        y:{ticks:{font:{size:10},color:'#666',callback:v=>v.toLocaleString('es-ES')+'€'},grid:{color:'rgba(255,255,255,0.04)'}}
+        y:{ticks:{font:{size:10},color:'#666',callback:v=>chartMode==='fondos'?v.toLocaleString('es-ES'):v.toLocaleString('es-ES')+'€'},grid:{color:'rgba(255,255,255,0.04)'}}
       }
     }
   });
@@ -487,6 +495,79 @@ function updateSelects(){
   const opts=window.state.positions.map(p=>`<option value="${p.nombre}">${p.nombre}</option>`).join('');
   ['h-fondo','a-fondo'].forEach(id=>{const el=document.getElementById(id);const prev=el.value;el.innerHTML='<option value="">— selecciona —</option>'+opts;el.value=prev;});
 }
+
+function diffYMD(from,to){
+  let y=to.getFullYear()-from.getFullYear();
+  let m=to.getMonth()-from.getMonth();
+  let d=to.getDate()-from.getDate();
+  if(d<0){m--;d+=new Date(to.getFullYear(),to.getMonth(),0).getDate();}
+  if(m<0){y--;m+=12;}
+  return {y,m,d};
+}
+
+function populateRolexForm(){
+  const r=window.state.rolex||{};
+  document.getElementById('r-modelo').value=r.modelo||'Rolex Submariner Date';
+  document.getElementById('r-ref').value=r.ref||'126610LN';
+  document.getElementById('r-inicio').value=r.inicio||'';
+  document.getElementById('r-objetivo').value=r.objetivo||'';
+}
+
+function saveRolex(){
+  const modelo=document.getElementById('r-modelo').value.trim();
+  const ref=document.getElementById('r-ref').value.trim();
+  const inicio=document.getElementById('r-inicio').value;
+  const objetivo=document.getElementById('r-objetivo').value;
+  window.state.rolex={modelo,ref,inicio,objetivo};
+  save();renderRolex();
+}
+
+function renderRolex(){
+  const el=document.getElementById('rolex-display');
+  if(!el)return;
+  const r=window.state.rolex;
+  if(!r||!r.objetivo){
+    el.innerHTML='<div class="empty">Configura la fecha de entrega estimada abajo para activar la cuenta atrás.</div>';
+    return;
+  }
+  const modelo=r.modelo||'Rolex';
+  const refTxt=r.ref?(' · '+r.ref):'';
+  const now=new Date(); now.setHours(0,0,0,0);
+  const objetivo=new Date(r.objetivo+'T00:00:00');
+  const inicio=r.inicio?new Date(r.inicio+'T00:00:00'):null;
+  const msDay=86400000;
+  const totalDias=Math.ceil((objetivo-now)/msDay);
+
+  const header=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:1.25rem;flex-wrap:wrap"><i class="ti ti-clock" style="color:var(--accent);font-size:18px"></i><span style="font-size:15px;font-weight:500">${modelo}</span><span style="color:var(--muted);font-family:var(--mono);font-size:12px">${refTxt}</span></div>`;
+
+  if(totalDias<=0){
+    el.innerHTML=header+`<div style="text-align:center;padding:1.5rem 0"><div style="font-size:28px;font-weight:500;color:var(--accent)">⌚ ¡Disponible!</div><div style="color:var(--muted);font-size:13px;margin-top:8px">La fecha estimada de entrega ya ha llegado. Toca pasarse por Relojería Alemana 🎉</div></div>`;
+    return;
+  }
+
+  const ymd=diffYMD(now,objetivo);
+  const fechaTxt=objetivo.toLocaleDateString('es-ES',{day:'numeric',month:'long',year:'numeric'});
+  const box=(val,lab)=>`<div style="text-align:center;flex:1;min-width:78px"><div style="font-family:var(--mono);font-size:34px;font-weight:500;color:var(--text);line-height:1">${val}</div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:6px">${lab}</div></div>`;
+  const sep=`<div style="font-family:var(--mono);font-size:30px;color:var(--border2);align-self:flex-start;line-height:1">:</div>`;
+
+  let progressHtml='';
+  if(inicio && objetivo>inicio){
+    let pct=((now-inicio)/(objetivo-inicio))*100;
+    pct=Math.max(0,Math.min(100,pct));
+    const inicioTxt=inicio.toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'});
+    progressHtml=`<div style="margin-top:1.75rem">
+      <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:6px"><span>${inicioTxt}</span><span style="color:var(--accent)">${pct.toFixed(1)}%</span><span>${fechaTxt}</span></div>
+      <div style="height:8px;background:var(--bg3);border-radius:5px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--accent);border-radius:5px;transition:width .4s"></div></div>
+    </div>`;
+  }
+
+  el.innerHTML=header+
+    `<div style="display:flex;gap:12px;justify-content:center;align-items:flex-start;padding:1rem 0;flex-wrap:wrap">${box(ymd.y,ymd.y===1?'año':'años')}${sep}${box(ymd.m,ymd.m===1?'mes':'meses')}${sep}${box(ymd.d,ymd.d===1?'día':'días')}</div>
+     <div style="text-align:center;color:var(--muted);font-size:13px;margin-top:.5rem">Faltan <strong style="color:var(--accent);font-family:var(--mono)">${totalDias.toLocaleString('es-ES')}</strong> días · entrega estimada <strong style="color:var(--text)">${fechaTxt}</strong></div>`
+    +progressHtml;
+}
+
+setInterval(()=>{const t=document.getElementById('tab-rolex');if(t&&t.style.display!=='none')renderRolex();},60000);
 
 function initApp(){
   document.getElementById('loading').style.display='none';
